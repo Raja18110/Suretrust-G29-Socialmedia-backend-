@@ -1,0 +1,34 @@
+{
+  "name": "social-media-backend",
+  "version": "1.0.0",
+  "description": "api-portal",
+  "homepage": "https://github.com/pkundu307/social-media-backend-st-g29#readme",
+  "bugs": {
+    "url": "https://github.com/pkundu307/social-media-backend-st-g29/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pkundu307/social-media-backend-st-g29.git"
+  },
+  "license": "ISC",
+  "author": "sure-trust",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "nodemon index.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cloudinary": "^2.8.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongodb": "^7.0.0",
+    "mongoose": "^8.19.3",
+    "multer": "^2.0.2",
+    "nodemailer": "^7.0.11",
+    "socket.io": "^4.8.1"
+  }
+}
