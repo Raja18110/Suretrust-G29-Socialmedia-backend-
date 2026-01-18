@@ -4,7 +4,7 @@ import multer from "multer";
 import dotenv from "dotenv";
 import { Notification } from "../schemas/notification.schema.js";
 import friendRequestSchema from "../schemas/friendRequest.schema.js";
-import { User } from "../schemas/user.schema.js"; // Added User import
+
 
 dotenv.config();
 
