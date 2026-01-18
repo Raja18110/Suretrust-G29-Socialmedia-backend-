@@ -8,7 +8,6 @@ import {
     getDeletedPosts,
     addComment,
     getFeedPost,
-    // New liked posts functions
     getPostsLikedByMe,
     getMyPostsLikedByOthers,
     unlikePost,
@@ -31,20 +30,10 @@ router.post("/comment/:id", authMiddleware, addComment);
 router.get("/feed", authMiddleware, getFeedPost);
 
 // ============ NEW LIKED POSTS ROUTES ============
-
-// Get posts liked by current user
 router.get("/liked-by-me", authMiddleware, getPostsLikedByMe);
-
-// Get current user's posts that are liked by others
 router.get("/my-liked-posts", authMiddleware, getMyPostsLikedByOthers);
-
-// Unlike a post
 router.post("/unlike/:id", authMiddleware, unlikePost);
-
-// Get post by ID
-router.get("/:id", authMiddleware, getPostById);
-
-// Get post statistics
 router.get("/stats/overview", authMiddleware, getPostStats);
+router.get("/:id", authMiddleware, getPostById); // Keep this LAST to avoid route conflicts
 
 export default router;

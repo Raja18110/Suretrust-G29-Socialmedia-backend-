@@ -4,6 +4,7 @@ import multer from "multer";
 import dotenv from "dotenv";
 import { Notification } from "../schemas/notification.schema.js";
 import friendRequestSchema from "../schemas/friendRequest.schema.js";
+import { User } from "../schemas/user.schema.js"; // Added User import
 
 dotenv.config();
 
@@ -42,26 +43,30 @@ export const createPost = async (req, res) => {
     if (req.file) {
       const result = await uploadToCloudinary(req.file.buffer);
       imageUrl = result.secure_url;
-      console.log("Uploaded file no file uploaded:", imageUrl);
+      console.log("Uploaded file:", imageUrl);
     }
 
     const user = req.user._id;
     const { text } = req.body;
-    // handleUpload(req.file);
-    console.log(text)
-    if (!text) {
-      return res.status(400).json({ message: "Text is required" });
+
+    // Allow posts with just images
+    if (!text && !imageUrl) {
+      return res.status(400).json({ message: "Text or image is required" });
     }
 
     const post = await Post.create({
       user,
-      text,
+      text: text || "",
       image: imageUrl
     });
 
+    // Populate user info before returning
+    const populatedPost = await Post.findById(post._id)
+      .populate("user", "username profilePic");
+
     return res.status(201).json({
       message: "Post created successfully",
-      post
+      post: populatedPost
     });
 
   } catch (err) {
@@ -74,25 +79,34 @@ export const likePost = async (req, res) => {
   try {
     const userId = req.user._id;
     const { id } = req.params;
-    // console.log(userId,id);
 
     const post = await Post.findById(id);
-    if (!post) {
-      return res.status(400).json({ message: "post not found" });
+    if (!post || post.isDeleted) {
+      return res.status(404).json({ message: "Post not found" });
     }
+
+    // Check if already liked
     if (post.likes.includes(userId)) {
       return res.status(400).json({ message: "You have already liked this post" });
     }
+
     post.likes.push(userId);
     await post.save();
-    const newNotification = await Notification.create({
-      to: post.user,
-      from: userId,
-      type: "like",
-      post: post._id
-    });
 
-    res.status(200).json({ message: "post liked successfully" });
+    // Create notification only if the post is not owned by the liker
+    if (post.user.toString() !== userId.toString()) {
+      await Notification.create({
+        to: post.user,
+        from: userId,
+        type: "like",
+        post: post._id
+      });
+    }
+
+    res.status(200).json({
+      message: "Post liked successfully",
+      likesCount: post.likes.length
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -103,10 +117,13 @@ export const getMyPosts = async (req, res) => {
     const userId = req.user._id;
     const posts = await Post.find({ user: userId, isDeleted: false })
       .limit(5)
-      .populate(
-        "user",
-        "username email profilePic"
-      ).sort({ createdAt: -1 });
+      .populate("user", "username email profilePic")
+      .populate({
+        path: 'likes',
+        select: 'username profilePic',
+        options: { limit: 5 }
+      })
+      .sort({ createdAt: -1 });
     res.status(200).json({ posts });
   } catch (error) {
     console.error(error);
@@ -119,25 +136,19 @@ export const getDeletedPosts = async (req, res) => {
     const userId = req.user._id;
     const { page = 1, limit = 10 } = req.query;
 
-    // Convert page and limit to numbers
     const pageNumber = parseInt(page);
     const limitNumber = parseInt(limit);
     const skip = (pageNumber - 1) * limitNumber;
 
-    // Find deleted posts for the current user
     const deletedPosts = await Post.find({
       user: userId,
       isDeleted: true
     })
       .skip(skip)
       .limit(limitNumber)
-      .populate(
-        "user",
-        "username email profilePic"
-      )
+      .populate("user", "username email profilePic")
       .sort({ deletedAt: -1, createdAt: -1 });
 
-    // Get total count for pagination
     const totalDeletedPosts = await Post.countDocuments({
       user: userId,
       isDeleted: true
@@ -164,31 +175,21 @@ export const deletePost = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user._id;
-    console.log(id, userId);
 
     const post = await Post.findById(id);
 
     if (!post) {
       return res.status(404).json({ message: "Post not found" });
     }
+
     if (post.user.toString() !== userId.toString()) {
       return res.status(403).json({ message: "You are not allowed to delete this post" });
     }
-    if (post.isDeleted) {
-      return res.status(404).json({ message: "Post is already deleted" });
-    }
-    if (post.image) {
-      const publicId = post.image
-        .split("/")
-        .pop()
-        .split(".")[0];
 
-      try {
-        await cloudinary.v2.uploader.destroy(publicId);
-      } catch (err) {
-        console.log("Cloudinary delete failed (not critical)", err.message);
-      }
+    if (post.isDeleted) {
+      return res.status(400).json({ message: "Post is already deleted" });
     }
+
     post.isDeleted = true;
     post.deletedAt = new Date();
     await post.save();
@@ -201,7 +202,6 @@ export const deletePost = async (req, res) => {
   }
 };
 
-//add comment to post 
 export const addComment = async (req, res) => {
   try {
     const userId = req.user._id;
@@ -217,7 +217,6 @@ export const addComment = async (req, res) => {
       return res.status(404).json({ message: "Post not found" });
     }
 
-    // create comment
     const commentObj = {
       user: userId,
       text: text.trim(),
@@ -227,7 +226,13 @@ export const addComment = async (req, res) => {
     post.comments.push(commentObj);
     await post.save();
 
-    const newComment = post.comments[post.comments.length - 1];
+    const populatedPost = await Post.findById(post._id)
+      .populate({
+        path: 'comments.user',
+        select: 'username profilePic'
+      });
+
+    const newComment = populatedPost.comments[populatedPost.comments.length - 1];
 
     if (post.user.toString() !== userId.toString()) {
       await Notification.create({
@@ -250,8 +255,6 @@ export const addComment = async (req, res) => {
   }
 };
 
-//add comment to post 
-
 export const restorePost = async (req, res) => {
   try {
     const { id } = req.params;
@@ -263,7 +266,6 @@ export const restorePost = async (req, res) => {
       return res.status(404).json({ message: "Post not found" });
     }
 
-    // Only the owner can restore
     if (post.user.toString() !== userId.toString()) {
       return res.status(403).json({ message: "You are not allowed to restore this post" });
     }
@@ -274,7 +276,6 @@ export const restorePost = async (req, res) => {
 
     post.isDeleted = false;
     post.deletedAt = null;
-
     await post.save();
 
     return res.status(200).json({ message: "Post restored successfully", post });
@@ -293,9 +294,6 @@ export const getFeedPost = async (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 5, 20);
     const skip = (page - 1) * limit;
 
-    /* ------------------------------------
-       STEP 1: Get direct friends
-    ------------------------------------ */
     const friends = await friendRequestSchema.find({
       $or: [{ from: userId }, { to: userId }],
       status: "accepted"
@@ -307,10 +305,6 @@ export const getFeedPost = async (req, res) => {
         : f.from.toString()
     );
 
-    /* ------------------------------------
-       STEP 2: Get mutual friends
-       (friends of my friends)
-    ------------------------------------ */
     const mutualRequests = await friendRequestSchema.find({
       $or: [
         { from: { $in: directFriendIds } },
@@ -333,28 +327,26 @@ export const getFeedPost = async (req, res) => {
       }
     });
 
-    /* ------------------------------------
-       STEP 3: Final feed user IDs
-    ------------------------------------ */
+    // Include user's own posts in feed
     const feedUserIds = [
+      userId.toString(),
       ...new Set([...directFriendIds, ...mutualFriendIds])
     ];
 
-    /* ------------------------------------
-       STEP 4: Fetch feed posts (ONE QUERY)
-    ------------------------------------ */
     const posts = await Post.find({
       user: { $in: feedUserIds },
       isDeleted: false
     })
-      .populate("user", "name email profilePic")
+      .populate("user", "username profilePic")
+      .populate({
+        path: 'likes',
+        select: 'username profilePic',
+        options: { limit: 5 }
+      })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
 
-    /* ------------------------------------
-       STEP 5: Response
-    ------------------------------------ */
     return res.status(200).json({
       message: "Feed posts fetched successfully",
       page,
@@ -365,13 +357,10 @@ export const getFeedPost = async (req, res) => {
 
   } catch (error) {
     console.error("Feed Error:", error);
-    res.status(500).json({ message: "Failed to fetch feed posts" });
+    res.status(500).json({ message: error.message });
   }
 };
 
-// ============ ADDED LIKED POSTS FUNCTIONS ============
-
-// ============ GET POSTS LIKED BY CURRENT USER ============
 export const getPostsLikedByMe = async (req, res) => {
   try {
     const userId = req.user._id;
@@ -381,9 +370,8 @@ export const getPostsLikedByMe = async (req, res) => {
     const limitNumber = parseInt(limit);
     const skip = (pageNumber - 1) * limitNumber;
 
-    // Find posts that the current user has liked
     const likedPosts = await Post.find({
-      likes: { $in: [userId] },
+      likes: userId,
       isDeleted: false
     })
       .skip(skip)
@@ -396,9 +384,8 @@ export const getPostsLikedByMe = async (req, res) => {
       })
       .sort({ createdAt: -1 });
 
-    // Get total count
     const totalLikedPosts = await Post.countDocuments({
-      likes: { $in: [userId] },
+      likes: userId,
       isDeleted: false
     });
 
@@ -419,7 +406,6 @@ export const getPostsLikedByMe = async (req, res) => {
   }
 };
 
-// ============ GET POSTS OF CURRENT USER THAT ARE LIKED BY OTHERS ============
 export const getMyPostsLikedByOthers = async (req, res) => {
   try {
     const userId = req.user._id;
@@ -429,7 +415,6 @@ export const getMyPostsLikedByOthers = async (req, res) => {
     const limitNumber = parseInt(limit);
     const skip = (pageNumber - 1) * limitNumber;
 
-    // Find user's posts that have been liked by others
     const myLikedPosts = await Post.find({
       user: userId,
       isDeleted: false,
@@ -445,7 +430,6 @@ export const getMyPostsLikedByOthers = async (req, res) => {
       })
       .sort({ createdAt: -1 });
 
-    // Get total count
     const totalMyLikedPosts = await Post.countDocuments({
       user: userId,
       isDeleted: false,
@@ -469,7 +453,6 @@ export const getMyPostsLikedByOthers = async (req, res) => {
   }
 };
 
-// ============ UNLIKE POST ============
 export const unlikePost = async (req, res) => {
   try {
     const userId = req.user._id;
@@ -477,16 +460,14 @@ export const unlikePost = async (req, res) => {
 
     const post = await Post.findById(id);
 
-    if (!post) {
+    if (!post || post.isDeleted) {
       return res.status(404).json({ message: "Post not found" });
     }
 
-    // Check if user has liked the post
     if (!post.likes.includes(userId)) {
       return res.status(400).json({ message: "You have not liked this post" });
     }
 
-    // Remove user from likes array
     post.likes = post.likes.filter(
       likeId => likeId.toString() !== userId.toString()
     );
@@ -504,7 +485,6 @@ export const unlikePost = async (req, res) => {
   }
 };
 
-// ============ GET POST BY ID ============
 export const getPostById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -528,7 +508,6 @@ export const getPostById = async (req, res) => {
       return res.status(404).json({ message: "Post not found" });
     }
 
-    // Check if user liked this post
     const hasUserLiked = post.likes.some(
       like => like._id.toString() === userId.toString()
     );
@@ -549,28 +528,19 @@ export const getPostById = async (req, res) => {
   }
 };
 
-// ============ GET POST STATISTICS ============
 export const getPostStats = async (req, res) => {
   try {
     const userId = req.user._id;
 
-    // Get statistics in parallel
     const [
       totalPosts,
       deletedPosts,
       activePosts,
       totalLikes
     ] = await Promise.all([
-      // Total posts
       Post.countDocuments({ user: userId }),
-
-      // Deleted posts
       Post.countDocuments({ user: userId, isDeleted: true }),
-
-      // Active posts
       Post.countDocuments({ user: userId, isDeleted: false }),
-
-      // Total likes on user's posts
       Post.aggregate([
         { $match: { user: userId, isDeleted: false } },
         { $project: { likesCount: { $size: "$likes" } } },
